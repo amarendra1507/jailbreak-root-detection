@@ -5,6 +5,7 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import android.content.Context;
 
 @CapacitorPlugin(name = "JailbreakRootDetection")
 public class JailbreakRootDetectionPlugin extends Plugin {
@@ -17,6 +18,14 @@ public class JailbreakRootDetectionPlugin extends Plugin {
 
         JSObject ret = new JSObject();
         ret.put("value", implementation.echo(value));
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void jailbroken(PluginCall call) {
+        String value = call.getString("value");
+        JSObject ret = new JSObject();
+        ret.put("isJailbroken", implementation.jailbroken(getContext()));
         call.resolve(ret);
     }
 }

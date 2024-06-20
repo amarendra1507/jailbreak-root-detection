@@ -10,14 +10,13 @@ public class JailbreakRootDetectionPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "JailbreakRootDetectionPlugin"
     public let jsName = "JailbreakRootDetection"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "echo", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "jailbroken", returnType: CAPPluginReturnPromise)
     ]
     private let implementation = JailbreakRootDetection()
 
-    @objc func echo(_ call: CAPPluginCall) {
-        let value = call.getString("value") ?? ""
+    @objc func jailbroken(_ call: CAPPluginCall) {
         call.resolve([
-            "value": implementation.echo(value)
+            "isJailbroken": implementation.jailbroken()
         ])
     }
 }
