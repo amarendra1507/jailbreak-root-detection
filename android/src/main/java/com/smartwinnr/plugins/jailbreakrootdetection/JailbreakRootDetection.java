@@ -13,16 +13,55 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-public class JailbreakRootDetection {
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.spec.X509EncodedKeySpec;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
+import java.security.NoSuchAlgorithmException;
+import java.security.spec.InvalidKeySpecException;
+import org.jose4j.jwe.JsonWebEncryption;
+import org.jose4j.jws.JsonWebSignature;
+import org.jose4j.lang.JoseException;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import com.google.android.gms.tasks.Task;
+import com.google.android.gms.tasks.Tasks;
+import com.google.android.play.core.integrity.IntegrityManager;
+import com.google.android.play.core.integrity.IntegrityManagerFactory;
+import com.google.android.play.core.integrity.IntegrityTokenRequest;
+import com.google.android.play.core.integrity.IntegrityTokenResponse;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
+import android.util.Base64;
+import androidx.appcompat.app.AppCompatActivity;
+
+
+public class JailbreakRootDetection extends AppCompatActivity {
+
+    private static final String TAG = "JailbreakRootDetection";
+    private boolean isJailbroken = false;
     public String echo(String value) {
         Log.i("Echo", value);
         return value;
     }
 
-    public Boolean jailbroken(Context context) {
-        Log.i("Echo", "Checking root detectection");
+    public Boolean jailbroken(Context context, String verificationKey, String decryptionKey) {
+        Log.i("JailbreakRootDetection", "Checking root detectection");
         boolean isJailbroken = checkRootMethod1() || checkRootMethod2() || checkRootMethod3() || checkRootBypassApps(context) || checkDirPermissions() || checkforOverTheAirCertificates();
+        CompletableFuture<Boolean> future = performPlayIntegrityCheckAsync(context, verificationKey, decryptionKey);
+        //  Apply the device integrity test then send the result to the app
+        try {
+            isJailbroken = future.get(); // This will block until the future completes
+            Log.i(TAG, "Is device jailbroken: " + isJailbroken);
+        } catch (InterruptedException | ExecutionException e) {
+            Log.i(TAG, "An error occurred: " + e.getMessage());
+        }
+        Log.i("JailbreakRootDetection", "Returning to the callee");
         return isJailbroken;
     }
 
@@ -40,6 +79,7 @@ public class JailbreakRootDetection {
                 "/su/bin/su"
         };
         for (String path : paths) {
+            Log.i("checkRootMethod1", path);
             if (new File(path).exists()) return true;
         }
         return false;
@@ -61,6 +101,7 @@ public class JailbreakRootDetection {
     private boolean executeCommands(List<String> commands) {
         try {
             for (String command : commands) {
+                Log.i("executeCommands", command);
                 Process process = Runtime.getRuntime().exec(command);
                 BufferedReader in = new BufferedReader(new InputStreamReader(process.getInputStream()));
                 if (in.readLine() != null) return true;
@@ -157,6 +198,186 @@ public class JailbreakRootDetection {
         boolean exist = otacerts.exists();
         boolean result = !exist;
         return result;
+    }
+
+    private boolean performPlayIntegrityCheck(final Context context, String verifyKey, String decryptKey) {
+        final String nonce = NonceUtil.generateNonce(16);
+        Log.i("Nonce", nonce);
+        // DECRYPTION_KEY, VERIFICATION_KEY are hard-coded for tutorial
+        // but can be stored in a safer way, for example on a server
+        // and obtained by a secure http request
+        final String DECRYPTION_KEY = decryptKey;
+        final String VERIFICATION_KEY = verifyKey;
+        // Create an instance of IntegrityManager
+        IntegrityManager integrityManager = IntegrityManagerFactory.create(context);
+
+        // Request the integrity token by providing the nonce
+        Task<IntegrityTokenResponse> integrityTokenResponse = integrityManager
+                .requestIntegrityToken(IntegrityTokenRequest.builder().setNonce(nonce).build())
+                .addOnSuccessListener(response -> {
+                    String integrityToken = response.token();
+                    Log.i(TAG, "Integrity Token: " + integrityToken);
+
+                    byte[] decryptionKeyBytes = Base64.decode(DECRYPTION_KEY, Base64.DEFAULT);
+                    SecretKey decryptionKey = new SecretKeySpec(decryptionKeyBytes, 0, decryptionKeyBytes.length, "AES");
+
+                    byte[] encodedVerificationKey = Base64.decode(VERIFICATION_KEY, Base64.DEFAULT);
+                    PublicKey verificationKey = null;
+
+                    try {
+                        verificationKey = KeyFactory.getInstance("EC")
+                                .generatePublic(new X509EncodedKeySpec(encodedVerificationKey));
+                    } catch (InvalidKeySpecException | NoSuchAlgorithmException e) {
+                        Log.i(TAG, e.getMessage());
+                    }
+
+                    if (verificationKey == null) {
+                        return;
+                    }
+
+                    JsonWebEncryption jwe = null;
+                    try {
+                        jwe = (JsonWebEncryption) JsonWebSignature.fromCompactSerialization(integrityToken);
+                    } catch (JoseException e) {
+                        e.printStackTrace();
+                    }
+
+                    if (jwe == null) {
+                        return;
+                    }
+
+                    jwe.setKey(decryptionKey);
+
+                    String compactJws = null;
+                    try {
+                        compactJws = jwe.getPayload();
+                    } catch (JoseException e) {
+                        Log.i(TAG, e.getMessage());
+                    }
+
+                    JsonWebSignature jws = null;
+                    try {
+                        jws = (JsonWebSignature) JsonWebSignature.fromCompactSerialization(compactJws);
+                    } catch (JoseException e) {
+                        Log.i(TAG, e.getMessage());
+                    }
+
+                    if (jws == null) {
+                        return;
+                    }
+
+                    jws.setKey(verificationKey);
+
+                    String jsonPlainVerdict = "";
+                    try {
+                        jsonPlainVerdict = jws.getPayload();
+                    } catch (JoseException e) {
+                        Log.i(TAG, e.getMessage());
+                        return;
+                    }
+
+                    isJailbroken = parseDeviceIntegrity(jsonPlainVerdict);
+
+                    Log.i(TAG, jsonPlainVerdict);
+                })
+                .addOnFailureListener(ex -> {
+                    isJailbroken = false;
+                    Log.i(TAG, "Error requesting integrity token: " + ex.getMessage());
+                });
+
+        return isJailbroken;
+    }
+
+    private CompletableFuture<Boolean> performPlayIntegrityCheckAsync(final Context context, String verifyKey, String decryptKey) {
+        return CompletableFuture.supplyAsync(() -> {
+            final String nonce = NonceUtil.generateNonce(16);
+            Log.i("Nonce", nonce);
+
+            final String DECRYPTION_KEY = decryptKey;
+            final String VERIFICATION_KEY = verifyKey;
+            IntegrityManager integrityManager = IntegrityManagerFactory.create(context);
+
+            Task<IntegrityTokenResponse> integrityTokenResponse = integrityManager
+                    .requestIntegrityToken(IntegrityTokenRequest.builder().setNonce(nonce).build());
+
+            try {
+                IntegrityTokenResponse response = Tasks.await(integrityTokenResponse);
+                String integrityToken = response.token();
+                Log.i(TAG, "Integrity Token: " + integrityToken);
+
+                byte[] decryptionKeyBytes = Base64.decode(DECRYPTION_KEY, Base64.DEFAULT);
+                SecretKey decryptionKey = new SecretKeySpec(decryptionKeyBytes, 0, decryptionKeyBytes.length, "AES");
+
+                byte[] encodedVerificationKey = Base64.decode(VERIFICATION_KEY, Base64.DEFAULT);
+                PublicKey verificationKey = KeyFactory.getInstance("EC")
+                        .generatePublic(new X509EncodedKeySpec(encodedVerificationKey));
+
+                JsonWebEncryption jwe = (JsonWebEncryption) JsonWebSignature.fromCompactSerialization(integrityToken);
+                jwe.setKey(decryptionKey);
+
+                String compactJws = jwe.getPayload();
+
+                JsonWebSignature jws = (JsonWebSignature) JsonWebSignature.fromCompactSerialization(compactJws);
+                jws.setKey(verificationKey);
+
+                String jsonPlainVerdict = jws.getPayload();
+                isJailbroken = parseDeviceIntegrity(jsonPlainVerdict);
+
+                Log.i(TAG, jsonPlainVerdict);
+            } catch (Exception e) {
+                isJailbroken = false;
+                Log.i(TAG, "Error requesting integrity token: " + e.getMessage());
+            }
+
+            return isJailbroken;
+        });
+    }
+
+    private boolean parseDeviceIntegrity(String jsonString) {
+        try {
+            // Parse the JSON string into a JSONObject
+            JSONObject jsonObject = new JSONObject(jsonString);
+
+            // Get the deviceIntegrity object
+            JSONObject deviceIntegrity = jsonObject.getJSONObject("deviceIntegrity");
+
+            // Get the deviceRecognitionVerdict array
+            JSONArray deviceRecognitionVerdict = deviceIntegrity.getJSONArray("deviceRecognitionVerdict");
+
+            // Log the values for debugging
+            for (int i = 0; i < deviceRecognitionVerdict.length(); i++) {
+                String verdict = deviceRecognitionVerdict.getString(i);
+                Log.d(TAG, "Verdict: " + verdict);
+            }
+
+            // Check if the required values are present
+            boolean meetsCriteria = false;
+            for (int i = 0; i < deviceRecognitionVerdict.length(); i++) {
+                String verdict = deviceRecognitionVerdict.getString(i);
+                if (verdict.equals("MEETS_BASIC_INTEGRITY") || 
+                    verdict.equals("MEETS_DEVICE_INTEGRITY") || 
+                    verdict.equals("MEETS_STRONG_INTEGRITY")) {
+                    meetsCriteria = true;
+                    break;
+                }
+            }
+
+            if (meetsCriteria) {
+
+                // The device meets the required integrity criteria
+                Log.d(TAG, "Device meets the required integrity criteria.");
+                return false;
+            } else {
+                // The device does not meet the required integrity criteria
+                Log.d(TAG, "Device does not meet the required integrity criteria.");
+                return true;
+            }
+
+        } catch (JSONException e) {
+            Log.e(TAG, "JSON Exception: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return false;
     }
 
 

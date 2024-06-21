@@ -23,9 +23,10 @@ public class JailbreakRootDetectionPlugin extends Plugin {
 
     @PluginMethod
     public void jailbroken(PluginCall call) {
-        String value = call.getString("value");
+        String verificationKey = call.getString("verificationKey");
+        String decryptionKey = call.getString("decryptionKey");
         JSObject ret = new JSObject();
-        ret.put("isJailbroken", implementation.jailbroken(getContext()));
+        ret.put("isJailbroken", implementation.jailbroken(getContext(), verificationKey, decryptionKey));
         call.resolve(ret);
     }
 }
