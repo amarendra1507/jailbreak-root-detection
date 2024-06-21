@@ -11,9 +11,9 @@ export class JailbreakRootDetectionWeb
     return options;
   }
 
-  async jailbroken(options: {value: string}) : Promise<{value: string}> {
+  async jailbroken(options: {verificationKey: string, decryptionKey: string}) : Promise<{isJailbroken: boolean}> {
     console.log('ECHO', "isJailbroken", options);
-    return options;
+    return {isJailbroken: true};
   }
 
 }

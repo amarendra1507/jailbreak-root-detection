@@ -39,14 +39,14 @@ echo(options: { value: string; }) => Promise<{ value: string; }>
 ### jailbroken(...)
 
 ```typescript
-jailbroken(options: { value: string; }) => Promise<{ value: string; }>
+jailbroken(options: { verificationKey: string; decryptionKey: string; }) => Promise<{ isJailbroken: boolean; }>
 ```
 
-| Param         | Type                            |
-| ------------- | ------------------------------- |
-| **`options`** | <code>{ value: string; }</code> |
+| Param         | Type                                                             |
+| ------------- | ---------------------------------------------------------------- |
+| **`options`** | <code>{ verificationKey: string; decryptionKey: string; }</code> |
 
-**Returns:** <code>Promise&lt;{ value: string; }&gt;</code>
+**Returns:** <code>Promise&lt;{ isJailbroken: boolean; }&gt;</code>
 
 --------------------
 
