@@ -52,16 +52,22 @@ public class JailbreakRootDetection extends AppCompatActivity {
 
     public Boolean jailbroken(Context context, String verificationKey, String decryptionKey) {
         Log.i("JailbreakRootDetection", "Checking root detectection");
-        boolean isJailbroken = checkRootMethod1() || checkRootMethod2() || checkRootMethod3() || checkRootBypassApps(context) || checkDirPermissions() || checkforOverTheAirCertificates();
-        CompletableFuture<Boolean> future = performPlayIntegrityCheckAsync(context, verificationKey, decryptionKey);
-        //  Apply the device integrity test then send the result to the app
-        try {
-            isJailbroken = future.get(); // This will block until the future completes
-            Log.i(TAG, "Is device jailbroken: " + isJailbroken);
-        } catch (InterruptedException | ExecutionException e) {
-            Log.i(TAG, "An error occurred: " + e.getMessage());
-        }
-        Log.i("JailbreakRootDetection", "Returning to the callee");
+        boolean isJailbroken =
+                checkRootMethod1() ||
+                checkRootMethod2() ||
+                checkRootMethod3() ||
+                checkRootBypassApps(context) ||
+                checkDirPermissions() ||
+                checkforOverTheAirCertificates();
+         CompletableFuture<Boolean> future = performPlayIntegrityCheckAsync(context, verificationKey, decryptionKey);
+         //  Apply the device integrity test then send the result to the app
+         try {
+             isJailbroken = future.get(); // This will block until the future completes
+             Log.i(TAG, "Is device jailbroken: " + isJailbroken);
+         } catch (InterruptedException | ExecutionException e) {
+             Log.i(TAG, "An error occurred: " + e.getMessage());
+         }
+        Log.i("JailbreakRootDetection", "Jailbreak Detection Completed");
         return isJailbroken;
     }
 
@@ -76,10 +82,19 @@ public class JailbreakRootDetection extends AppCompatActivity {
                 "/system/sd/xbin/su",
                 "/system/bin/failsafe/su",
                 "/data/local/su",
-                "/su/bin/su"
+                "/su/bin/su",
+                "/system/xbin/su",
+                "/sbin/su",
+                "/system/bin/busybox",
+                "/system/xbin/busybox",
+                "/system/xbin/daemonsu",
+                "/system/sd/xbin/su",
+                "/system/usr/we-need-root/su-backup"
         };
         for (String path : paths) {
             Log.i("checkRootMethod1", path);
+            boolean checkPath = new File(path).exists();
+            Log.i("checkPath", new String(String.valueOf(checkPath)));
             if (new File(path).exists()) return true;
         }
         return false;
@@ -114,6 +129,7 @@ public class JailbreakRootDetection extends AppCompatActivity {
     }
 
      private boolean checkRootBypassApps(final Context context) {
+        Log.i("checkRootBypassApps",  "Root Bypassapp checking ");
         List<String> rootAppsPackages = Arrays.asList(
                 "com.topjohnwu.magisk",                // Magisk
                 "eu.chainfire.supersu",                // SuperSU
@@ -155,12 +171,16 @@ public class JailbreakRootDetection extends AppCompatActivity {
         PackageManager pm = context.getPackageManager();
         for (String packageName : packages) {
             try {
-                pm.getPackageInfo(packageName, 0);
+                Log.i("Package Name", packageName);
+                PackageInfo isPackageInstalled = pm.getPackageInfo(packageName, 0);
+                Log.i("isPackageInstalled", String.valueOf(isPackageInstalled));
                 return true;  // Package found
             } catch (PackageManager.NameNotFoundException e) {
+                Log.i("Package Name Not Found", packageName);
                 // Package not found
             }
         }
+        Log.i("Returning false", "Check Failed");
         return false;
     }
 
@@ -169,8 +189,6 @@ public class JailbreakRootDetection extends AppCompatActivity {
         boolean isReadableDataDir;
         boolean result = false;
         List<String> pathShouldNotWritable = Arrays.asList(
-            "/data",
-            "/",
             "/system",
             "/system/bin",
             "/system/sbin",
@@ -185,6 +203,9 @@ public class JailbreakRootDetection extends AppCompatActivity {
 
             isWritableDir = currentDir.exists() && currentDir.canWrite();
             isReadableDataDir = (dirName.equals("/data") && currentDir.canRead());
+
+            Log.i("checkDirPermissions isWritableDir", String.valueOf(isWritableDir));
+            Log.i("checkDirPermissions isReadableDataDir", String.valueOf(isReadableDataDir));
 
             if (isWritableDir || isReadableDataDir) {
                 result = true;
@@ -281,7 +302,7 @@ public class JailbreakRootDetection extends AppCompatActivity {
                     Log.i(TAG, jsonPlainVerdict);
                 })
                 .addOnFailureListener(ex -> {
-                    isJailbroken = false;
+                    isJailbroken = true;
                     Log.i(TAG, "Error requesting integrity token: " + ex.getMessage());
                 });
 
@@ -341,8 +362,15 @@ public class JailbreakRootDetection extends AppCompatActivity {
             // Get the deviceIntegrity object
             JSONObject deviceIntegrity = jsonObject.getJSONObject("deviceIntegrity");
 
-            // Get the deviceRecognitionVerdict array
-            JSONArray deviceRecognitionVerdict = deviceIntegrity.getJSONArray("deviceRecognitionVerdict");
+            JSONArray deviceRecognitionVerdict;
+            // Device recognistion will come in non rooted device if not coming then device might be rooted
+            try {
+                // Get the deviceRecognitionVerdict array
+                deviceRecognitionVerdict = deviceIntegrity.getJSONArray("deviceRecognitionVerdict");
+            } catch(JSONException error) {
+                return true;
+            }
+
 
             // Log the values for debugging
             for (int i = 0; i < deviceRecognitionVerdict.length(); i++) {
