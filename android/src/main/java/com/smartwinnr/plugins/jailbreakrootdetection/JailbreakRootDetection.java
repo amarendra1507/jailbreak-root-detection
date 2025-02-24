@@ -8,10 +8,16 @@ import android.os.Build;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Scanner;
 
 import java.security.KeyFactory;
 import java.security.PublicKey;
@@ -32,6 +38,8 @@ import com.google.android.play.core.integrity.IntegrityManager;
 import com.google.android.play.core.integrity.IntegrityManagerFactory;
 import com.google.android.play.core.integrity.IntegrityTokenRequest;
 import com.google.android.play.core.integrity.IntegrityTokenResponse;
+
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -39,11 +47,14 @@ import java.util.concurrent.Executors;
 
 import android.util.Base64;
 import androidx.appcompat.app.AppCompatActivity;
+import java.io.OutputStreamWriter;
 
 
 public class JailbreakRootDetection extends AppCompatActivity {
 
     private static final String TAG = "JailbreakRootDetection";
+    static final String BINARY_SU = "su";
+    static final String BINARY_BUSYBOX = "busybox";
     private boolean isJailbroken = false;
     public String echo(String value) {
         Log.i("Echo", value);
@@ -52,49 +63,133 @@ public class JailbreakRootDetection extends AppCompatActivity {
 
     public Boolean jailbroken(Context context, String verificationKey, String decryptionKey) {
         Log.i("JailbreakRootDetection", "Checking root detectection");
+
+        boolean rootMethod1Result = checkRootMethod1();
+        boolean checkRootMethod2Result = checkRootMethod2();
+        boolean checkRootMethod3Result = checkRootMethod3();
+        boolean checkRootBypassAppsResult = checkRootBypassApps(context);
+        boolean checkKeyLoggerAppsResult = checkKeyLoggerApps(context);
+        boolean checkDirPermissionsResult = checkDirPermissions();
+        boolean checkforOverTheAirCertificatesResult = checkforOverTheAirCertificates();
+        boolean checkForBinaryResultSu = checkForBinary(BINARY_SU);
+        boolean checkForDangerousProps = checkForDangerousProps();
+        boolean checkForRWPathsResult = checkForRWPaths();
+        boolean checkSuResult = checkSuExists();
+        boolean checkForMagiskBinaryResult = checkForMagiskBinary();
+
+        Log.i("JailbreakRootDetection", "Dangerous File " + rootMethod1Result);
+        Log.i("JailbreakRootDetection", "Dangerous Command " + checkRootMethod2Result);
+        Log.i("JailbreakRootDetection", "Test Keys " + checkRootMethod3Result);
+        Log.i("JailbreakRootDetection", "RootBypass App Check " + checkRootBypassAppsResult);
+        Log.i("JailbreakRootDetection", "Key Logger App Check " + checkKeyLoggerAppsResult);
+        Log.i("JailbreakRootDetection", "Directory Permission " + checkDirPermissionsResult);
+        Log.i("JailbreakRootDetection", "OTA Cert "+ checkforOverTheAirCertificatesResult);
+        Log.i("JailbreakRootDetection", "SU Binary "+ checkForBinaryResultSu);
+        Log.i("JailbreakRootDetection", "Dangerous Properties " + checkForDangerousProps);
+        Log.i("JailbreakRootDetection", "Read/Write Path Check "+ checkForRWPathsResult);
+        Log.i("JailbreakRootDetection", "SU Commnad Execution "+ checkSuResult);
+        Log.i("JailbreakRootDetection", "Magisk Binary "+ checkForMagiskBinaryResult);
+
         boolean isJailbroken =
-                checkRootMethod1() ||
-                checkRootMethod2() ||
-                checkRootMethod3() ||
-                checkRootBypassApps(context) ||
-                checkDirPermissions() ||
-                checkforOverTheAirCertificates();
+                rootMethod1Result ||
+                checkRootMethod2Result ||
+                checkRootMethod3Result ||
+                checkRootBypassAppsResult ||
+                checkKeyLoggerAppsResult ||
+                checkDirPermissionsResult ||
+                checkforOverTheAirCertificatesResult ||
+                checkForBinaryResultSu ||
+                checkForDangerousProps ||
+                checkForRWPathsResult ||
+                checkSuResult ||
+                checkForMagiskBinaryResult;
+
          CompletableFuture<Boolean> future = performPlayIntegrityCheckAsync(context, verificationKey, decryptionKey);
          //  Apply the device integrity test then send the result to the app
          try {
-             isJailbroken = future.get(); // This will block until the future completes
+             boolean googlePlayIntegrityCheck = future.get(); // This will block until the future completes
              Log.i(TAG, "Is device jailbroken: " + isJailbroken);
+             isJailbroken = googlePlayIntegrityCheck || isJailbroken;
          } catch (InterruptedException | ExecutionException e) {
              Log.i(TAG, "An error occurred: " + e.getMessage());
          }
+        isDeviceRooted();
         Log.i("JailbreakRootDetection", "Jailbreak Detection Completed");
         return isJailbroken;
+    }
+
+    public static boolean isDeviceRooted() {
+        String[] commands = {
+                "which su",
+                "ls -l /sbin/su /system/bin/su /system/xbin/su /data/local/xbin/su /data/local/bin/su /system/sd/xbin/su /system/bin/failsafe/su /data/local/su",
+                "ls -l /system/app/Superuser.apk /system/app/SuperSU.apk /system/app/Magisk.apk",
+                "which busybox",
+                "which magisk",
+                "ls -l /sbin/.magisk",
+                "ls -l /system/xbin/daemonsu /system/xbin/supolicy",
+                "cat /init.rc | grep 'su'",
+                "cat /init.environ.rc | grep 'su'",
+                "pm list packages | grep 'superuser'",
+                "pm list packages | grep 'supersu'",
+                "pm list packages | grep 'magisk'"
+        };
+
+        for (String command : commands) {
+            if (executeCommand(command)) {
+                return true; // If any command indicates root, return true
+            }
+        }
+
+        return false;
+    }
+
+    private static boolean executeCommand(String command) {
+        Log.i("executeCommand", String.valueOf(command));
+        try {
+            Process process = Runtime.getRuntime().exec(command);
+            Log.i("executeCommand", String.valueOf(process));
+            BufferedReader in = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String output;
+            Log.i("executeCommand", String.valueOf(in.readLine()));
+            while ((output = in.readLine()) != null) {
+                Log.i("executeCommand", String.valueOf(output));
+                if (!output.isEmpty()) {
+                    return true; // If any output is received, consider it as an indication of root
+                }
+            }
+            in.close();
+            process.waitFor();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return false;
     }
 
 
     private boolean checkRootMethod1() {
         String[] paths = {
                 "/sbin/su",
-                "/system/bin/su",
-                "/system/xbin/su",
                 "/data/local/xbin/su",
                 "/data/local/bin/su",
-                "/system/sd/xbin/su",
                 "/system/bin/failsafe/su",
                 "/data/local/su",
-                "/su/bin/su",
-                "/system/xbin/su",
-                "/sbin/su",
-                "/system/bin/busybox",
-                "/system/xbin/busybox",
                 "/system/xbin/daemonsu",
                 "/system/sd/xbin/su",
-                "/system/usr/we-need-root/su-backup"
+                "/system/usr/we-need-root/su-backup",
+                "/system/bin/busybox",
+                "/system/xbin/busybox",
+                "/sbin/busybox",
+                "/system/su",
+                "/data/local/xbin/busybox",
+                "/data/local/bin/busybox",
+                "/data/local/busybox",
+                "/su/bin/busybox",
+                "/system/bin/su",
+                "/system/xbin/su",
+                "/su/bin/su"
         };
+
         for (String path : paths) {
-            Log.i("checkRootMethod1", path);
-            boolean checkPath = new File(path).exists();
-            Log.i("checkPath", new String(String.valueOf(checkPath)));
             if (new File(path).exists()) return true;
         }
         return false;
@@ -116,7 +211,6 @@ public class JailbreakRootDetection extends AppCompatActivity {
     private boolean executeCommands(List<String> commands) {
         try {
             for (String command : commands) {
-                Log.i("executeCommands", command);
                 Process process = Runtime.getRuntime().exec(command);
                 BufferedReader in = new BufferedReader(new InputStreamReader(process.getInputStream()));
                 if (in.readLine() != null) return true;
@@ -167,20 +261,31 @@ public class JailbreakRootDetection extends AppCompatActivity {
         return isAnyPackageInstalled(rootAppsPackages, context);
     }
 
+    private boolean checkKeyLoggerApps(final Context context) {
+        Log.i("checkKeyLoggerApps",  "Key Logger App Checking");
+        List<String> rootAppsPackages = Arrays.asList(
+                "com.abifog.lokiboard",
+                "apk.typingrecorder",
+                "com.gpow.keylogger",
+                "com.onemanarmy.keylogger",
+                "com.mni.password.manager.keylogger",
+                "com.AwamiSolution.smartkeylogger",
+                "monitor.mubeen.androidkeylogger",
+                "com.as.keylogger"
+        );
+        return isAnyPackageInstalled(rootAppsPackages, context);
+    }
+
     private boolean isAnyPackageInstalled(List<String> packages, final Context context) {
         PackageManager pm = context.getPackageManager();
         for (String packageName : packages) {
             try {
-                Log.i("Package Name", packageName);
                 PackageInfo isPackageInstalled = pm.getPackageInfo(packageName, 0);
-                Log.i("isPackageInstalled", String.valueOf(isPackageInstalled));
                 return true;  // Package found
             } catch (PackageManager.NameNotFoundException e) {
-                Log.i("Package Name Not Found", packageName);
                 // Package not found
             }
         }
-        Log.i("Returning false", "Check Failed");
         return false;
     }
 
@@ -201,11 +306,13 @@ public class JailbreakRootDetection extends AppCompatActivity {
         for (String dirName : pathShouldNotWritable) {
             final File currentDir = new File(dirName);
 
+            Log.i("currentDir", String.valueOf(currentDir));
+            Log.i("exists", String.valueOf(currentDir.exists()));
+            Log.i("canWrite", String.valueOf(currentDir.canWrite()));
+            Log.i("canRead", String.valueOf(currentDir.canRead()));
+
             isWritableDir = currentDir.exists() && currentDir.canWrite();
             isReadableDataDir = (dirName.equals("/data") && currentDir.canRead());
-
-            Log.i("checkDirPermissions isWritableDir", String.valueOf(isWritableDir));
-            Log.i("checkDirPermissions isReadableDataDir", String.valueOf(isReadableDataDir));
 
             if (isWritableDir || isReadableDataDir) {
                 result = true;
@@ -224,7 +331,6 @@ public class JailbreakRootDetection extends AppCompatActivity {
     private boolean performPlayIntegrityCheck(final Context context, String verifyKey, String decryptKey) {
         final String nonce = NonceUtil.generateNonce(16);
         Log.i("Nonce", nonce);
-        // DECRYPTION_KEY, VERIFICATION_KEY are hard-coded for tutorial
         // but can be stored in a safer way, for example on a server
         // and obtained by a secure http request
         final String DECRYPTION_KEY = decryptKey;
@@ -312,10 +418,22 @@ public class JailbreakRootDetection extends AppCompatActivity {
     private CompletableFuture<Boolean> performPlayIntegrityCheckAsync(final Context context, String verifyKey, String decryptKey) {
         return CompletableFuture.supplyAsync(() -> {
             final String nonce = NonceUtil.generateNonce(16);
-            Log.i("Nonce", nonce);
+            String decKey = "";
+            if (Objects.equals(decryptKey, "NoVerification")) {
+                decKey = "nmzeD9LVp6yxJ3kvn3KETASozsqM+yx45G4NqKLeiFc=";
+            } else {
+                decKey = decryptKey;
+            }
 
-            final String DECRYPTION_KEY = decryptKey;
-            final String VERIFICATION_KEY = verifyKey;
+            String verKey ="";
+            if (Objects.equals(verifyKey, "NoVerification")) {
+                verKey = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOE63FZbxD8193Sz/KwlBfb5LYyBZSYOckuys17CuGp6KWgzju8xUmwy0gXpkSgNIZZxDTdD6mGMBnUOmwk0zSQ==";
+            } else {
+                verKey = verifyKey;
+            }
+
+            final String DECRYPTION_KEY = decKey;
+            final String VERIFICATION_KEY = verKey;
             IntegrityManager integrityManager = IntegrityManagerFactory.create(context);
 
             Task<IntegrityTokenResponse> integrityTokenResponse = integrityManager
@@ -346,6 +464,7 @@ public class JailbreakRootDetection extends AppCompatActivity {
 
                 Log.i(TAG, jsonPlainVerdict);
             } catch (Exception e) {
+//               Its going in exception because google play integrity api might be blocked by some third pary service or internet access is not given in this case we will consider the app as jailbroken
                 isJailbroken = false;
                 Log.i(TAG, "Error requesting integrity token: " + e.getMessage());
             }
@@ -407,6 +526,181 @@ public class JailbreakRootDetection extends AppCompatActivity {
         }
         return false;
     }
+
+    private boolean checkNativeLibraryLoaded() {
+            boolean libraryLoaded = false;
+            try {
+                System.loadLibrary("toolChecker");
+                libraryLoaded = true;
+            } catch (UnsatisfiedLinkError e) {
+
+            }
+            return libraryLoaded;
+
+    }
+
+    private boolean checkSuExists() {
+        Process process = null;
+        Log.i("checkSuExists", String.valueOf(process));
+        try {
+            Log.i("checkSuExists", String.valueOf(479));
+            process = Runtime.getRuntime().exec("ls -lart");
+
+            BufferedReader in = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            Log.i("checkSuExists", String.valueOf(in.readLine()));
+
+            return in.readLine() != null;
+        } catch (Throwable t) {
+            Log.i("checkSuExists", String.valueOf(t));
+            return false;
+        } finally {
+            if (process != null) process.destroy();
+        }
+    }
+
+    public boolean checkForBinary(String filename) {
+
+        String[] pathsArray = Const.getPaths();
+        boolean result = false;
+
+        for (String path : pathsArray) {
+            String completePath = path + filename;
+            File f = new File(path, filename);
+            boolean fileExists = f.exists();
+            if (fileExists) {
+                result = true;
+            }
+        }
+
+        return result;
+    }
+
+    private String[] propsReader() {
+        try {
+            InputStream inputstream = Runtime.getRuntime().exec("getprop").getInputStream();
+            if (inputstream == null) return null;
+            String propVal = new Scanner(inputstream).useDelimiter("\\A").next();
+            return propVal.split("\n");
+        } catch (IOException | NoSuchElementException e) {
+            return null;
+        }
+    }
+
+    private String[] mountReader() {
+        try {
+            InputStream inputstream = Runtime.getRuntime().exec("mount").getInputStream();
+            if (inputstream == null) return null;
+            String propVal = new Scanner(inputstream).useDelimiter("\\A").next();
+            return propVal.split("\n");
+        } catch (NoSuchElementException | IOException e) {
+            return null;
+        }
+    }
+
+    public boolean checkForDangerousProps() {
+
+        final Map<String, String> dangerousProps = new HashMap<>();
+        dangerousProps.put("ro.debuggable", "1");
+        dangerousProps.put("ro.secure", "0");
+
+        boolean result = false;
+
+        String[] lines = propsReader();
+
+        if (lines == null){
+            // Could not read, assume false;
+            return false;
+        }
+
+        for (String line : lines) {
+            for (String key : dangerousProps.keySet()) {
+                if (line.contains(key)) {
+                    String badValue = dangerousProps.get(key);
+                    badValue = "[" + badValue + "]";
+                    if (line.contains(badValue)) {
+                        result = true;
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * When you're root you can change the permissions on common system directories, this method checks if any of these patha Const.pathsThatShouldNotBeWritable are writable.
+     * @return true if one of the dir is writable
+     */
+    public boolean checkForRWPaths() {
+
+        boolean result = false;
+
+        //Run the command "mount" to retrieve all mounted directories
+        String[] lines = mountReader();
+
+        if (lines == null){
+            // Could not read, assume false;
+            return false;
+        }
+
+        //The SDK version of the software currently running on this hardware device.
+        int sdkVersion = android.os.Build.VERSION.SDK_INT;
+        Log.i("sdkVersion", String.valueOf(sdkVersion));
+
+        for (String line : lines) {
+
+            // Split lines into parts
+            String[] args = line.split(" ");
+
+            if ((sdkVersion <= android.os.Build.VERSION_CODES.M && args.length < 4)
+                    || (sdkVersion > android.os.Build.VERSION_CODES.M && args.length < 6)) {
+                // If we don't have enough options per line, skip this and log an error
+                continue;
+            }
+
+            String mountPoint;
+            String mountOptions;
+
+            /**
+             * To check if the device is running Android version higher than Marshmallow or not
+             */
+            if (sdkVersion > android.os.Build.VERSION_CODES.M) {
+                mountPoint = args[2];
+                mountOptions = args[5];
+            } else {
+                mountPoint = args[1];
+                mountOptions = args[3];
+            }
+
+            for(String pathToCheck: Const.pathsThatShouldNotBeWritable) {
+                if (mountPoint.equalsIgnoreCase(pathToCheck)) {
+
+                    /**
+                     * If the device is running an Android version above Marshmallow,
+                     * need to remove parentheses from options parameter;
+                     */
+                    if (android.os.Build.VERSION.SDK_INT > android.os.Build.VERSION_CODES.M) {
+                        mountOptions = mountOptions.replace("(", "");
+                        mountOptions = mountOptions.replace(")", "");
+
+                    }
+
+                    // Split options out and compare against "rw" to avoid false positives
+                    for (String option : mountOptions.split(",")){
+
+                        if (option.equalsIgnoreCase("rw")){
+                            result = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private boolean checkForMagiskBinary(){ return checkForBinary("magisk"); }
+
 
 
 }
